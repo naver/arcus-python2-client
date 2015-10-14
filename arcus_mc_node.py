@@ -114,7 +114,7 @@ class ArcusMCNode(object):
 	worker = None
 	shutdown = False
 
-	def __init__(self, addr, name, transcoder):
+	def __init__(self, addr, name, transcoder, node_allocator):
 		#mandatory files
 		self.addr = addr
 		self.name = name
@@ -124,6 +124,8 @@ class ArcusMCNode(object):
 		self.handle = Connection(addr)
 		self.ops = []
 		self.lock = Lock() # for ordering worker.q and ops
+
+		self.node_allocator = node_allocator
 
 	def __repr__(self):
 		return '%s-%s' % (self.addr, self.name)
@@ -142,17 +144,17 @@ class ArcusMCNode(object):
 		self.ops = []
 		
 	def disconnect_all(self): # shutdown
-		ArcusMCNode.shutdown = True
+		self.node_allocator.shutdown = True
 		self.disconnect()
 
-		ArcusMCNode.worker.q.put(None)
+		self.node_allocator.worker.q.put(None)
 		
 	def process_request(self, request):
 		if self.handle.disconnected():
 			ret = self.handle.connect()
 			if ret != None:
 				# re-register if node connection is available
-				self.worker.register_node(self)
+				self.node_allocator.worker.register_node(self)
 
 		self.handle.send_request(request)
 
@@ -359,11 +361,11 @@ class ArcusMCNode(object):
 			
 		if noreply: # or pipe
 			# don't need to receive response, set_result now
-			ArcusMCNode.worker.q.put(op)
+			self.node_allocator.worker.q.put(op)
 			op.set_result(True)
 		else:
 			self.lock.acquire()
-			ArcusMCNode.worker.q.put(op)
+			self.node_allocator.worker.q.put(op)
 			self.ops.append(op)
 			self.lock.release()
 
@@ -1073,10 +1075,11 @@ class EflagFilter(object):
 
 
 class ArcusMCPoll(threading.Thread):
-	def __init__(self):
+	def __init__(self, node_allocator):
 		threading.Thread.__init__(self)
 		self.epoll = select.epoll()
 		self.sock_node_map = {}
+		self.node_allocator = node_allocator
 
 	def run(self):
 		arcuslog(self, 'epoll start')
@@ -1084,7 +1087,7 @@ class ArcusMCPoll(threading.Thread):
 		while True:
 			events = self.epoll.poll(2)
 
-			if ArcusMCNode.shutdown == True:
+			if self.node_allocator.shutdown == True:
 				arcuslog(self, 'epoll out')
 				return
 
@@ -1110,19 +1113,21 @@ class ArcusMCPoll(threading.Thread):
 		
 		
 class ArcusMCWorker(threading.Thread):
-	def __init__(self):
+	def __init__(self, node_allocator):
 		threading.Thread.__init__(self)
 		self.q = Queue.Queue()
-		self.poll = ArcusMCPoll()
+		self.poll = ArcusMCPoll(node_allocator)
 		self.poll.start()
+		self.node_allocator = node_allocator
 
 	def run(self):
 		arcuslog(self, 'worker start')
 
 		while True:
 			op = self.q.get()
-			if ArcusMCNode.shutdown == True:
+			if self.node_allocator.shutdown == True:
 				arcuslog(self, 'worker done')
+				self.poll.join()
 				return
 
 			if op == None: # maybe shutdown
@@ -1142,13 +1147,22 @@ class ArcusMCWorker(threading.Thread):
 class ArcusMCNodeAllocator(object):
 	def __init__(self, transcoder):
 		self.transcoder = transcoder
-		ArcusMCNode.worker = ArcusMCWorker()
-		ArcusMCNode.worker.start()
+		self.worker = ArcusMCWorker(self)
+		self.worker.start()
+		self.shutdown = False
 		
 
 	def alloc(self, addr, name):
-		ret = ArcusMCNode(addr, name, self.transcoder)
-		ArcusMCNode.worker.register_node(ret)
+		ret = ArcusMCNode(addr, name, self.transcoder, self)
+		self.worker.register_node(ret)
 		return ret
+
+	def join(self):
+		self.worker.join()
+	
+		
+
+
+
 
 
