@@ -62,7 +62,7 @@ class arcus_node(object):
 		return '[%s:%s]' % (self.ip, self.port)
 
 	def do_arcus_command(self, command, timeout=0.2):
-		tn = telnetlib.Telnet(self.ip, self.port)
+		tn = telnetlib.Telnet(str(self.ip), int(self.port))
 		tn.write(command + '\r\n')
 
 		if command[0:5] == 'scrub' or command[0:5] == 'flush':
