@@ -25,8 +25,12 @@ import struct, datetime, time
 import Queue
 import zlib
 
+import logging
+logging.basicConfig()
+
 
 g_log = False
+
 
 def enable_log(flag = True):
 	global g_log
@@ -319,7 +323,7 @@ class ArcusLocator(object):
 		# clear first
 		self.node_list = []
 		for node in self.addr_node_map.values():
-			node.in_use = false
+			node.in_use = False
 			
 		# update live nodes
 		for child in children:
@@ -328,7 +332,7 @@ class ArcusLocator(object):
 
 			if addr in self.addr_node_map:
 				self.addr_node_map[addr].in_use = True
-				node = addr_node_map[addr]
+				node = self.addr_node_map[addr]
 			else:
 				# new node
 				node = self.node_allocator.alloc(addr, name)
@@ -347,10 +351,14 @@ class ArcusLocator(object):
 		arcuslog(self, 'sorted node list', self.node_list)
 
 		# disconnect dead node
+		dead_list = []
 		for addr, node in self.addr_node_map.items():
 			if node.in_use == False:
-				node.disconnect_all()
-				self.addr_node_map.erase(addr)
+				dead_list.append(node)
+
+		for node in dead_list:
+			node.disconnect()
+			del self.addr_node_map[addr]
 
 		self.lock.release()
 
@@ -358,7 +366,7 @@ class ArcusLocator(object):
 		arcuslog(self, 'watch children called: ', event)
 
 		# rehashing
-		children = self.zk.get_children(event.path)
+		children = self.zk.get_children(event.path, watch=self.watch_children)
 		self.hash_nodes(children)
 
 	def get_node(self, key):
